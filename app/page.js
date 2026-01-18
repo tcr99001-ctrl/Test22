@@ -54,7 +54,7 @@ export default function TurnBasedDrawingLiar() {
   const [error, setError] = useState(initError);
   const [copyStatus, setCopyStatus] = useState(null);
   const [timeLeft, setTimeLeft] = useState(0);
-  const [guessInput, setGuessInput] = useState(''); // 라이어 정답 입력
+  const [guessInput, setGuessInput] = useState('');
 
   // Canvas Refs
   const canvasRef = useRef(null);
@@ -66,8 +66,18 @@ export default function TurnBasedDrawingLiar() {
   const isJoined = user && players.some(p => p.id === user.uid);
   const isHost = roomData?.hostId === user?.uid;
 
-  // --- Auth & Data Sync ---
+  // --- Auth & Initial URL Check ---
   useEffect(() => {
+    // 1. URL에서 방 코드 감지 (가장 먼저 실행)
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const codeFromUrl = params.get('room');
+      if (codeFromUrl && codeFromUrl.length === 4) {
+        setRoomCode(codeFromUrl.toUpperCase());
+      }
+    }
+
+    // 2. 인증 시작
     if(!auth) return;
     const unsub = onAuthStateChanged(auth, u => {
       if(u) setUser(u);
@@ -76,21 +86,26 @@ export default function TurnBasedDrawingLiar() {
     return () => unsub();
   }, []);
 
+  // --- Data Sync ---
   useEffect(() => {
     if(!user || !roomCode || roomCode.length!==4 || !db) return;
     
+    // 방 데이터 구독
     const unsubRoom = onSnapshot(doc(db,'rooms',roomCode), s => {
       if(s.exists()) {
         const data = s.data();
         setRoomData(data);
-        // 타이머 동기화 (서버 종료시간 - 현재시간)
+        // 타이머 동기화
         if (data.status === 'playing' && data.turnEndTime) {
           const diff = Math.ceil((data.turnEndTime - Date.now()) / 1000);
           setTimeLeft(diff > 0 ? diff : 0);
         }
-      } else setRoomData(null);
+      } else {
+        setRoomData(null);
+      }
     });
 
+    // 플레이어 목록 구독
     const unsubPlayers = onSnapshot(collection(db,'rooms',roomCode,'players'), s => {
       const list=[]; s.forEach(d=>list.push({id:d.id, ...d.data()}));
       setPlayers(list);
@@ -98,39 +113,25 @@ export default function TurnBasedDrawingLiar() {
     return () => { unsubRoom(); unsubPlayers(); };
   }, [user, roomCode]);
 
-  // --- 1. Game Loop (Host Only) ---
-  // 방장이 시간을 체크하고 턴을 넘기거나 단계(Phase)를 변경합니다.
+  // --- Game Loop (Host Only) ---
   useEffect(() => {
     if (!isHost || !roomData || roomData.status !== 'playing') return;
 
     const interval = setInterval(async () => {
       const now = Date.now();
-      
-      // 턴 시간이 끝났는지 확인
       if (now >= roomData.turnEndTime) {
         const nextIndex = roomData.currentTurnIndex + 1;
-
         if (nextIndex >= roomData.turnOrder.length) {
-          // 모든 사람 턴 종료 -> 투표 단계로 이동
-          await updateDoc(doc(db, 'rooms', roomCode), {
-            status: 'voting',
-            votes: {},
-            turnEndTime: 0
-          });
+          await updateDoc(doc(db, 'rooms', roomCode), { status: 'voting', votes: {}, turnEndTime: 0 });
         } else {
-          // 다음 사람 턴으로 이동
-          await updateDoc(doc(db, 'rooms', roomCode), {
-            currentTurnIndex: nextIndex,
-            turnEndTime: now + (TURN_DURATION * 1000)
-          });
+          await updateDoc(doc(db, 'rooms', roomCode), { currentTurnIndex: nextIndex, turnEndTime: now + (TURN_DURATION * 1000) });
         }
       }
     }, 1000);
-
     return () => clearInterval(interval);
   }, [isHost, roomData, roomCode]);
 
-  // --- 2. Client Timer ---
+  // --- Client Timer ---
   useEffect(() => {
     if (roomData?.status === 'playing' && timeLeft > 0) {
       const timer = setInterval(() => setTimeLeft(p => Math.max(0, p - 1)), 1000);
@@ -138,7 +139,7 @@ export default function TurnBasedDrawingLiar() {
     }
   }, [roomData?.status, timeLeft]);
 
-  // --- Canvas Logic (Same as before but with Turn Check) ---
+  // --- Canvas Logic ---
   const drawStrokes = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas || !roomData?.strokes) return;
@@ -188,12 +189,10 @@ export default function TurnBasedDrawingLiar() {
     return { x: (clientX - rect.left) / rect.width, y: (clientY - rect.top) / rect.height };
   };
 
-  // ★ 그리기 권한 체크
-  const isMyTurn = roomData?.status === 'playing' && 
-                   roomData?.turnOrder?.[roomData.currentTurnIndex] === user?.uid;
+  const isMyTurn = roomData?.status === 'playing' && roomData?.turnOrder?.[roomData.currentTurnIndex] === user?.uid;
 
   const startDrawing = (e) => {
-    if (!isMyTurn) return; // 내 턴 아니면 무시
+    if (!isMyTurn) return;
     setIsDrawing(true);
     currentPath.current = [getRelativePos(e)];
   };
@@ -207,7 +206,6 @@ export default function TurnBasedDrawingLiar() {
     const { width, height } = canvasRef.current;
     ctx.lineWidth = lineWidth;
     ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
     ctx.strokeStyle = color;
     const prev = currentPath.current[currentPath.current.length - 2];
     if (prev) {
@@ -232,7 +230,7 @@ export default function TurnBasedDrawingLiar() {
   };
 
   const clearCanvas = async () => {
-    if (isHost || isMyTurn) { // 방장이나 현재 턴인 사람만
+    if (isHost || isMyTurn) {
       if (confirm("지우시겠습니까?")) await updateDoc(doc(db, 'rooms', roomCode), { strokes: [] });
     }
   };
@@ -262,45 +260,31 @@ export default function TurnBasedDrawingLiar() {
     vibrate();
     const word = WORDS[Math.floor(Math.random() * WORDS.length)];
     const liar = players[Math.floor(Math.random() * players.length)].id;
-    
-    // 플레이어 순서 섞기
     const turnOrder = players.map(p => p.id).sort(() => Math.random() - 0.5);
 
     await updateDoc(doc(db,'rooms',roomCode), {
-      status: 'playing',
-      keyword: word,
-      liarId: liar,
-      strokes: [],
-      turnOrder: turnOrder,
-      currentTurnIndex: 0,
-      turnEndTime: Date.now() + (TURN_DURATION * 1000)
+      status: 'playing', keyword: word, liarId: liar, strokes: [],
+      turnOrder: turnOrder, currentTurnIndex: 0, turnEndTime: Date.now() + (TURN_DURATION * 1000)
     });
   };
 
-  // 투표 로직
   const handleVote = async (targetId) => {
-    if (roomData.votes?.[user.uid]) return; // 이미 투표함
+    if (roomData.votes?.[user.uid]) return;
     const newVotes = { ...roomData.votes, [user.uid]: targetId };
     
-    // 모두 투표했는지 확인
     if (Object.keys(newVotes).length === players.length) {
-      // 결과 집계
       const counts = {};
       Object.values(newVotes).forEach(id => { counts[id] = (counts[id] || 0) + 1; });
-      
-      // 최다 득표자 찾기
       let maxVotes = 0;
       let votedUser = null;
       Object.entries(counts).forEach(([id, count]) => {
         if (count > maxVotes) { maxVotes = count; votedUser = id; }
-        else if (count === maxVotes) votedUser = null; // 동점 처리 (없음)
+        else if (count === maxVotes) votedUser = null;
       });
 
       if (votedUser === roomData.liarId) {
-        // 라이어 검거 성공 -> 라이어의 마지막 기회 (정답 맞히기)
         await updateDoc(doc(db, 'rooms', roomCode), { status: 'liar_guess', votes: newVotes });
       } else {
-        // 시민 지목 -> 라이어 승리
         await updateDoc(doc(db, 'rooms', roomCode), { status: 'result', winner: 'liar', reason: 'vote_fail' });
       }
     } else {
@@ -308,28 +292,35 @@ export default function TurnBasedDrawingLiar() {
     }
   };
 
-  // 라이어 정답 제출
   const submitLiarGuess = async () => {
     const isCorrect = guessInput.trim() === roomData.keyword;
     await updateDoc(doc(db, 'rooms', roomCode), {
-      status: 'result',
-      winner: isCorrect ? 'liar' : 'citizen',
-      reason: isCorrect ? 'guess_success' : 'guess_fail'
+      status: 'result', winner: isCorrect ? 'liar' : 'citizen', reason: isCorrect ? 'guess_success' : 'guess_fail'
     });
   };
 
   const handleReset = async () => await updateDoc(doc(db,'rooms',roomCode), { status: 'lobby', strokes: [], keyword: '', liarId: '' });
 
+  // ★ [수정됨] 링크 복사 로직 (완벽한 절대 경로 생성)
   const copyInviteLink = () => {
-    const url = `${window.location.origin}?room=${roomCode}`;
+    if (typeof window === 'undefined') return;
+    
+    // 1. 현재 주소에서 쿼리스트링 제거 (순수 도메인+경로만 추출)
+    const baseUrl = window.location.href.split('?')[0];
+    // 2. 방 코드 붙이기
+    const inviteUrl = `${baseUrl}?room=${roomCode}`;
+    
+    // 3. 복사 실행
     const el = document.createElement('textarea');
-    el.value = url;
+    el.value = inviteUrl;
     document.body.appendChild(el);
     el.select();
     document.execCommand('copy');
     document.body.removeChild(el);
+    
     setCopyStatus('link');
     setTimeout(() => setCopyStatus(null), 2000);
+    vibrate();
   };
 
   // --- Render Helpers ---
@@ -354,7 +345,6 @@ export default function TurnBasedDrawingLiar() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 font-sans relative">
-      {/* Header */}
       <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between sticky top-0 z-20 shadow-sm">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-blue-100 rounded-xl text-blue-600"><Palette size={24}/></div>
@@ -363,20 +353,26 @@ export default function TurnBasedDrawingLiar() {
         {isJoined && roomCode && <div className="bg-slate-100 px-3 py-1 rounded font-black text-slate-500">{roomCode}</div>}
       </header>
 
-      {/* 1. Entrance */}
       {!isJoined && (
         <div className="p-6 max-w-md mx-auto mt-10 bg-white rounded-3xl shadow-xl space-y-6 animate-in fade-in">
           <h2 className="text-2xl font-black text-center">게임 입장</h2>
           <input value={playerName} onChange={e=>setPlayerName(e.target.value)} placeholder="닉네임" className="w-full bg-slate-50 border p-4 rounded-xl font-bold"/>
+          
+          {/* 방 코드가 없으면(새로고침 등) 방 만들기 버튼 표시, 있으면 입장 버튼 강조 */}
           {!roomCode && <button onClick={handleCreate} className="w-full bg-blue-600 text-white p-4 rounded-xl font-bold shadow-lg">방 만들기</button>}
+          
           <div className="flex gap-2">
-            <input value={roomCode} onChange={e=>setRoomCode(e.target.value.toUpperCase())} placeholder="CODE" className="flex-1 bg-slate-50 border p-4 rounded-xl text-center font-bold"/>
+            <input 
+              value={roomCode} 
+              onChange={e=>setRoomCode(e.target.value.toUpperCase())} 
+              placeholder="CODE" 
+              className="flex-1 bg-slate-50 border p-4 rounded-xl text-center font-bold"
+            />
             <button onClick={handleJoin} className="flex-1 bg-slate-800 text-white p-4 rounded-xl font-bold">입장</button>
           </div>
         </div>
       )}
 
-      {/* 2. Lobby */}
       {isJoined && roomData?.status === 'lobby' && (
         <div className="p-6 max-w-md mx-auto space-y-6">
           <div className="bg-white p-6 rounded-[2rem] shadow-xl flex justify-between items-center">
@@ -396,11 +392,8 @@ export default function TurnBasedDrawingLiar() {
         </div>
       )}
 
-      {/* 3. Playing Phase */}
-      {isJoined && roomData?.status === 'playing' && (
+      {isJoined && roomData?.status === 'playing' && role && (
         <div className="flex flex-col h-[calc(100vh-80px)] p-4 max-w-lg mx-auto">
-          
-          {/* Status Info */}
           <div className={`mb-3 p-4 rounded-2xl border flex flex-col gap-2 ${role.isLiar?'bg-red-50 border-red-200':'bg-white border-slate-200'}`}>
             <div className="flex justify-between items-center">
               <div><h2 className={`text-xl font-black ${role.isLiar?'text-red-500':'text-slate-800'}`}>{role.text}</h2><p className="text-xs text-slate-400 font-bold">{role.sub}</p></div>
@@ -408,7 +401,6 @@ export default function TurnBasedDrawingLiar() {
                 <div className="text-2xl font-black font-mono text-slate-700 flex items-center gap-1"><Timer size={20}/> {timeLeft}s</div>
               </div>
             </div>
-            {/* Drawer Info */}
             <div className="bg-slate-900 text-white p-2 rounded-lg flex items-center justify-center gap-2 text-sm">
               <PenTool size={14}/> 
               <span>현재 화가: <span className="font-bold text-amber-400">{getCurrentDrawerName()}</span></span>
@@ -416,9 +408,8 @@ export default function TurnBasedDrawingLiar() {
             </div>
           </div>
 
-          {/* Canvas */}
           <div className={`relative flex-1 bg-white rounded-3xl shadow-inner border-4 overflow-hidden touch-none ${isMyTurn ? 'border-blue-400' : 'border-slate-200 opacity-90'}`}>
-            {!isMyTurn && <div className="absolute inset-0 z-10 bg-transparent"></div>} {/* 터치 방지 레이어 */}
+            {!isMyTurn && <div className="absolute inset-0 z-10 bg-transparent"></div>}
             <canvas ref={canvasRef} onMouseDown={startDrawing} onMouseMove={draw} onMouseUp={endDrawing} onMouseLeave={endDrawing} onTouchStart={startDrawing} onTouchMove={draw} onTouchEnd={endDrawing} className="w-full h-full cursor-crosshair"/>
             {isMyTurn && (
               <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-white/90 p-2 rounded-2xl shadow-xl flex gap-2 border">
@@ -432,21 +423,17 @@ export default function TurnBasedDrawingLiar() {
         </div>
       )}
 
-      {/* 4. Voting Phase */}
       {isJoined && roomData?.status === 'voting' && (
         <div className="p-6 max-w-md mx-auto space-y-6 text-center animate-in zoom-in">
           <div className="bg-white p-6 rounded-[2rem] shadow-xl border border-slate-100">
             <h2 className="text-2xl font-black mb-2 text-slate-800 flex items-center justify-center gap-2"><Gavel/> 라이어 투표</h2>
             <p className="text-slate-500 text-sm mb-6">그림이 이상했던 사람을 지목하세요!</p>
-            
             <div className="grid grid-cols-2 gap-3">
               {players.map(p => {
                 const isVoted = roomData.votes?.[user.uid] === p.id;
                 return (
                   <button 
-                    key={p.id} 
-                    onClick={() => handleVote(p.id)}
-                    disabled={roomData.votes?.[user.uid]}
+                    key={p.id} onClick={() => handleVote(p.id)} disabled={roomData.votes?.[user.uid]}
                     className={`p-4 rounded-xl font-bold border-2 transition-all ${isVoted ? 'bg-red-100 border-red-500 text-red-600' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'}`}
                   >
                     {p.name}
@@ -459,7 +446,6 @@ export default function TurnBasedDrawingLiar() {
         </div>
       )}
 
-      {/* 5. Liar Guess Phase (라이어 검거 성공 시) */}
       {isJoined && roomData?.status === 'liar_guess' && (
         <div className="p-6 max-w-md mx-auto space-y-6 text-center animate-in zoom-in">
           <div className="bg-red-50 p-8 rounded-[2rem] border-2 border-red-100 shadow-xl">
@@ -467,22 +453,14 @@ export default function TurnBasedDrawingLiar() {
             {role.isLiar ? (
               <>
                 <p className="text-red-400 text-sm font-bold mb-6">마지막 기회입니다. 정답을 맞히면 역전승!</p>
-                <input 
-                  value={guessInput} 
-                  onChange={e=>setGuessInput(e.target.value)} 
-                  placeholder="정답 입력 (예: 사과)" 
-                  className="w-full bg-white border border-red-200 p-4 rounded-xl font-bold text-center mb-4 outline-none focus:ring-2 focus:ring-red-300"
-                />
+                <input value={guessInput} onChange={e=>setGuessInput(e.target.value)} placeholder="정답 입력" className="w-full bg-white border border-red-200 p-4 rounded-xl font-bold text-center mb-4 outline-none focus:ring-2 focus:ring-red-300"/>
                 <button onClick={submitLiarGuess} className="w-full bg-red-600 text-white py-4 rounded-xl font-bold shadow-lg">정답 제출</button>
               </>
-            ) : (
-              <p className="text-slate-500 font-bold animate-pulse">라이어가 최후의 변론(정답 맞히기) 중입니다...</p>
-            )}
+            ) : <p className="text-slate-500 font-bold animate-pulse">라이어가 최후의 변론 중입니다...</p>}
           </div>
         </div>
       )}
 
-      {/* 6. Result Phase */}
       {isJoined && roomData?.status === 'result' && (
         <div className="p-6 max-w-md mx-auto text-center animate-in bounce-in">
           <div className={`p-8 rounded-[2rem] shadow-2xl mb-6 border-4 ${roomData.winner === 'citizen' ? 'bg-blue-50 border-blue-200' : 'bg-red-50 border-red-200'}`}>
@@ -498,14 +476,11 @@ export default function TurnBasedDrawingLiar() {
               <p className="text-xs text-slate-400 font-bold uppercase mb-1">정답</p>
               <p className="text-2xl font-black text-slate-800">{roomData.keyword}</p>
             </div>
-            <div className="mt-4">
-               <p className="text-sm font-bold text-slate-500">라이어: {players.find(p=>p.id===roomData.liarId)?.name}</p>
-            </div>
+            <div className="mt-4"><p className="text-sm font-bold text-slate-500">라이어: {players.find(p=>p.id===roomData.liarId)?.name}</p></div>
           </div>
           {isHost && <button onClick={handleReset} className="w-full bg-slate-800 text-white py-4 rounded-2xl font-bold shadow-lg flex items-center justify-center gap-2"><RefreshCw/> 대기실로 돌아가기</button>}
         </div>
       )}
-
     </div>
   );
-                                         }
+            }
