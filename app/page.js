@@ -12,26 +12,35 @@ import {
 } from 'lucide-react';
 
 // ==================================================================
-// [필수] 본인의 Firebase 설정값
+// [완료] 기존에 사용하시던 Firebase 설정값을 적용했습니다.
 // ==================================================================
 const firebaseConfig = {
-  apiKey: "AIzaSy...",
-  authDomain: "...",
-  projectId: "...",
-  storageBucket: "...",
-  messagingSenderId: "...",
-  appId: "..."
+  apiKey: "AIzaSyBPd5xk9UseJf79GTZogckQmKKwwogneco",
+  authDomain: "test-4305d.firebaseapp.com",
+  projectId: "test-4305d",
+  storageBucket: "test-4305d.firebasestorage.app",
+  messagingSenderId: "402376205992",
+  appId: "1:402376205992:web:be662592fa4d5f0efb849d"
 };
 
 // --- Firebase Init ---
 let firebaseApp;
-try {
-  if (!getApps().length) firebaseApp = initializeApp(firebaseConfig);
-  else firebaseApp = getApps()[0];
-} catch (e) { console.error("Firebase Init Error:", e); }
+let db;
+let auth;
+let initError = null;
 
-const db = firebaseApp ? getFirestore(firebaseApp) : null;
-const auth = firebaseApp ? getAuth(firebaseApp) : null;
+try {
+  if (!getApps().length) {
+    firebaseApp = initializeApp(firebaseConfig);
+  } else {
+    firebaseApp = getApps()[0];
+  }
+  db = getFirestore(firebaseApp);
+  auth = getAuth(firebaseApp);
+} catch (e) { 
+  console.error("Firebase Init Error:", e);
+  initError = e.message;
+}
 
 // --- 게임 데이터 ---
 const WORDS = ["사과", "자동차", "안경", "나무", "고양이", "집", "비행기", "시계", "우산", "피자", "자전거", "해바라기"];
@@ -45,7 +54,7 @@ export default function DrawingLiarGame() {
   const [playerName, setPlayerName] = useState('');
   const [roomData, setRoomData] = useState(null);
   const [players, setPlayers] = useState([]);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState(initError);
   const [copyStatus, setCopyStatus] = useState(null);
   
   // 캔버스 관련 상태
@@ -67,10 +76,13 @@ export default function DrawingLiarGame() {
   }, []);
 
   useEffect(() => {
-    if(!auth) return;
+    if(!auth) {
+      if(!initError) setError("Firebase 인증 객체가 없습니다. 설정을 확인하세요.");
+      return;
+    }
     const unsub = onAuthStateChanged(auth, u => {
       if(u) setUser(u);
-      else signInAnonymously(auth).catch(console.error);
+      else signInAnonymously(auth).catch(e => setError("로그인 실패: " + e.message));
     });
     return () => unsub();
   }, []);
@@ -171,8 +183,9 @@ export default function DrawingLiarGame() {
   const startDrawing = (e) => {
     if (roomData?.status !== 'playing') return;
     setIsDrawing(true);
+    // 현재 패스를 초기화하고 시작점 추가
     const pos = getRelativePos(e);
-    currentPath.current = [pos]; // 경로 초기화
+    currentPath.current = [pos];
   };
 
   const draw = (e) => {
@@ -188,10 +201,12 @@ export default function DrawingLiarGame() {
     
     ctx.lineWidth = lineWidth;
     ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     ctx.strokeStyle = color;
 
-    const prevPos = currentPath.current[currentPath.current.length - 2];
-    if (prevPos) {
+    const points = currentPath.current;
+    if (points.length >= 2) {
+      const prevPos = points[points.length - 2];
       ctx.beginPath();
       ctx.moveTo(prevPos.x * width, prevPos.y * height);
       ctx.lineTo(pos.x * width, pos.y * height);
@@ -296,11 +311,15 @@ export default function DrawingLiarGame() {
 
   const copyInviteLink = () => {
     const url = `${window.location.origin}?room=${roomCode}`;
-    navigator.clipboard.writeText(url).then(() => {
-      setCopyStatus('link');
-      setTimeout(() => setCopyStatus(null), 2000);
-      vibrate();
-    });
+    const el = document.createElement('textarea');
+    el.value = url;
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand('copy');
+    document.body.removeChild(el);
+    setCopyStatus('link');
+    setTimeout(() => setCopyStatus(null), 2000);
+    vibrate();
   };
 
   // --- 렌더링 헬퍼 ---
@@ -314,6 +333,14 @@ export default function DrawingLiarGame() {
     };
   };
   const role = myRoleInfo();
+
+  if (error) return (
+    <div className="flex h-screen flex-col items-center justify-center bg-slate-50 text-red-500 font-bold p-6 text-center">
+      <AlertCircle size={40} className="mb-4"/>
+      <p>{error}</p>
+      <button onClick={()=>window.location.reload()} className="mt-4 bg-slate-200 px-4 py-2 rounded text-black">새로고침</button>
+    </div>
+  );
 
   if(!user) return <div className="h-screen flex items-center justify-center bg-slate-50 font-bold text-slate-400">Loading...</div>;
 
@@ -337,15 +364,6 @@ export default function DrawingLiarGame() {
           </div>
         )}
       </header>
-
-      {/* Error */}
-      {error && (
-        <div className="mx-6 mt-6 p-4 bg-red-50 border border-red-100 rounded-2xl flex items-center gap-3 text-red-500 animate-pulse">
-          <AlertCircle size={20} />
-          <span className="text-sm font-bold">{error}</span>
-          <button onClick={()=>setError(null)} className="ml-auto">✕</button>
-        </div>
-      )}
 
       {/* --- SCENE 1: ENTRANCE --- */}
       {!isJoined && (
@@ -421,7 +439,7 @@ export default function DrawingLiarGame() {
       )}
 
       {/* --- SCENE 3: GAMEPLAY (CANVAS) --- */}
-      {isJoined && (roomData?.status === 'playing' || roomData?.status === 'result') && (
+      {isJoined && (roomData?.status === 'playing' || roomData?.status === 'result') && role && (
         <div className="flex flex-col h-[calc(100vh-80px)] p-4 max-w-lg mx-auto">
           
           {/* Status Bar */}
@@ -457,13 +475,13 @@ export default function DrawingLiarGame() {
             {/* Toolbar (Floating) */}
             {roomData.status === 'playing' && (
               <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur-md p-2 rounded-2xl shadow-xl border border-slate-200 flex gap-2">
-                <button onClick={()=>setColor('#000000')} className={`p-3 rounded-xl transition-all ${color==='#000000' ? 'bg-slate-900 text-white scale-110' : 'hover:bg-slate-100'}`}>
+                <button onClick={()=>setColor('#000000')} className={`p-3 rounded-xl transition-all ${color==='#000000' ? 'bg-slate-900 ring-2 ring-slate-900' : 'hover:bg-slate-100'}`}>
                   <div className="w-4 h-4 bg-black rounded-full"></div>
                 </button>
-                <button onClick={()=>setColor('#ef4444')} className={`p-3 rounded-xl transition-all ${color==='#ef4444' ? 'bg-red-100 ring-2 ring-red-500 scale-110' : 'hover:bg-slate-100'}`}>
+                <button onClick={()=>setColor('#ef4444')} className={`p-3 rounded-xl transition-all ${color==='#ef4444' ? 'bg-red-100 ring-2 ring-red-500' : 'hover:bg-slate-100'}`}>
                   <div className="w-4 h-4 bg-red-500 rounded-full"></div>
                 </button>
-                <button onClick={()=>setColor('#3b82f6')} className={`p-3 rounded-xl transition-all ${color==='#3b82f6' ? 'bg-blue-100 ring-2 ring-blue-500 scale-110' : 'hover:bg-slate-100'}`}>
+                <button onClick={()=>setColor('#3b82f6')} className={`p-3 rounded-xl transition-all ${color==='#3b82f6' ? 'bg-blue-100 ring-2 ring-blue-500' : 'hover:bg-slate-100'}`}>
                   <div className="w-4 h-4 bg-blue-500 rounded-full"></div>
                 </button>
                 <div className="w-px h-8 bg-slate-200 my-auto mx-1"></div>
@@ -497,4 +515,4 @@ export default function DrawingLiarGame() {
 
     </div>
   );
-                  }
+      }
