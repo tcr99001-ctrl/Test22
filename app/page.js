@@ -39,8 +39,28 @@ try {
   initError = e.message;
 }
 
-// --- Constants ---
-const WORDS = ["사과", "자동차", "안경", "나무", "고양이", "집", "비행기", "시계", "우산", "피자", "자전거", "해바라기", "스마트폰", "운동화", "아이스크림"];
+// --- [업데이트] 대폭 추가된 단어 리스트 (총 100개 이상) ---
+const WORDS = [
+  // 동물
+  "사자", "호랑이", "기린", "코끼리", "토끼", "고양이", "강아지", "펭귄", "판다", "상어",
+  "고래", "독수리", "닭", "뱀", "거북이", "돼지", "원숭이", "다람쥐", "오리", "말",
+  // 음식
+  "피자", "햄버거", "치킨", "라면", "김치찌개", "삼겹살", "초밥", "떡볶이", "아이스크림", "케이크",
+  "바나나", "사과", "수박", "포도", "딸기", "옥수수", "감자", "고구마", "계란후라이", "샌드위치",
+  // 사물/도구
+  "스마트폰", "노트북", "안경", "시계", "우산", "가위", "연필", "지우개", "칫솔", "치약",
+  "모자", "신발", "양말", "장갑", "마스크", "거울", "열쇠", "리모컨", "선풍기", "드라이기",
+  // 탈것/장소
+  "비행기", "자동차", "자전거", "버스", "기차", "배", "우주선", "헬리콥터", "오토바이", "트럭",
+  "학교", "병원", "경찰서", "소방서", "놀이터", "영화관", "편의점", "화장실", "도서관", "수영장",
+  // 스포츠/취미
+  "축구", "농구", "야구", "배구", "수영", "테니스", "볼링", "골프", "낚시", "등산",
+  "피아노", "기타", "노래방", "게임", "그림그리기", "요리", "캠핑", "독서", "영화", "춤",
+  // 자연/기타
+  "해바라기", "장미", "선인장", "나무", "산", "바다", "구름", "무지개", "눈사람", "크리스마스 트리",
+  "유령", "외계인", "로봇", "공룡", "좀비", "천사", "악마", "드라큘라", "피카츄", "뽀로로"
+];
+
 const TURN_DURATION = 15; // 턴당 15초
 
 const vibrate = () => { if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(30); };
@@ -68,7 +88,7 @@ export default function TurnBasedDrawingLiar() {
 
   // --- Auth & Initial URL Check ---
   useEffect(() => {
-    // 1. URL에서 방 코드 감지 (가장 먼저 실행)
+    // 1. URL에서 방 코드 감지
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const codeFromUrl = params.get('room');
@@ -301,23 +321,17 @@ export default function TurnBasedDrawingLiar() {
 
   const handleReset = async () => await updateDoc(doc(db,'rooms',roomCode), { status: 'lobby', strokes: [], keyword: '', liarId: '' });
 
-  // ★ [수정됨] 링크 복사 로직 (완벽한 절대 경로 생성)
+  // 링크 복사 로직
   const copyInviteLink = () => {
     if (typeof window === 'undefined') return;
-    
-    // 1. 현재 주소에서 쿼리스트링 제거 (순수 도메인+경로만 추출)
     const baseUrl = window.location.href.split('?')[0];
-    // 2. 방 코드 붙이기
     const inviteUrl = `${baseUrl}?room=${roomCode}`;
-    
-    // 3. 복사 실행
     const el = document.createElement('textarea');
     el.value = inviteUrl;
     document.body.appendChild(el);
     el.select();
     document.execCommand('copy');
     document.body.removeChild(el);
-    
     setCopyStatus('link');
     setTimeout(() => setCopyStatus(null), 2000);
     vibrate();
@@ -357,10 +371,7 @@ export default function TurnBasedDrawingLiar() {
         <div className="p-6 max-w-md mx-auto mt-10 bg-white rounded-3xl shadow-xl space-y-6 animate-in fade-in">
           <h2 className="text-2xl font-black text-center">게임 입장</h2>
           <input value={playerName} onChange={e=>setPlayerName(e.target.value)} placeholder="닉네임" className="w-full bg-slate-50 border p-4 rounded-xl font-bold"/>
-          
-          {/* 방 코드가 없으면(새로고침 등) 방 만들기 버튼 표시, 있으면 입장 버튼 강조 */}
           {!roomCode && <button onClick={handleCreate} className="w-full bg-blue-600 text-white p-4 rounded-xl font-bold shadow-lg">방 만들기</button>}
-          
           <div className="flex gap-2">
             <input 
               value={roomCode} 
@@ -483,4 +494,4 @@ export default function TurnBasedDrawingLiar() {
       )}
     </div>
   );
-            }
+          }
